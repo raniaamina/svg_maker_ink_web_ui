@@ -6,5 +6,5 @@
     "default_model": "dall-e-3",
     "default_size": "1024x1024",
     "default_quality": "standard",
-    "default_save_directory": "C:\\Users\\youve\\Pictures\\AI_Images"
+    "default_save_directory": "~/.config/inkscape/extensions/svg_maker/"
 }
