@@ -60,8 +60,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
 
                 if (settings.provider) {
-                    providerSelect.value = settings.provider;
-                    updateModelDropdown(settings.provider);
+                    const isCustom = settings.provider.startsWith('custom_');
+                    providerSelect.value = isCustom ? 'openai_compatible' : settings.provider;
+                    if (isCustom) profileSelect.value = settings.provider;
+
+                    updateModelDropdown(isCustom ? 'openai_compatible' : settings.provider);
 
                     // Delay triggering change event so profiles can be populated first
                     setTimeout(() => {
@@ -235,30 +238,17 @@ document.addEventListener('DOMContentLoaded', () => {
             profileSelect.appendChild(opt);
         });
 
-        // Auto-select provider if it matches a profile ID
-        if (customProfiles.some(p => p.id === providerSelect.value)) {
-            profileSelect.value = providerSelect.value;
+        // Auto-select profile matching previous provider if valid
+        if (customProfiles.some(p => p.id === providerSettings['last_active_profile'])) {
+            profileSelect.value = providerSettings['last_active_profile'];
         } else if (customProfiles.length > 0) {
             profileSelect.value = customProfiles[0].id;
-            providerSelect.value = customProfiles[0].id; // Sync provider to first profile immediately to avoid desync
         }
     };
 
     profileSelect.addEventListener('change', () => {
         const selectedId = profileSelect.value;
-        // The provider internally is really just the profile ID for custom ones
-        const currentProviderOption = Array.from(providerSelect.options).find(o => o.value === selectedId);
-
-        // If the profile ID isn't in the main provider list, we temporarily inject it so backend knows
-        if (!currentProviderOption) {
-            const opt = document.createElement('option');
-            opt.value = selectedId;
-            opt.innerText = selectedId;
-            opt.hidden = true; // Still grouped visually under "OpenAI Compatible"
-            providerSelect.appendChild(opt);
-        }
-
-        providerSelect.value = selectedId;
+        providerSettings['last_active_profile'] = selectedId; // Store intention locally
         loadProfileData(selectedId);
     });
 
@@ -282,13 +272,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Provider Change UI Logic
     providerSelect.addEventListener('change', () => {
         const val = providerSelect.value;
-        let isCustomProfile = customProfiles.some(p => p.id === val);
 
-        if (val === 'ollama' || val === 'openai_compatible' || isCustomProfile) {
+        if (val === 'ollama' || val === 'openai_compatible') {
             endpointGroup.classList.remove('hidden');
             manualModelGroup.classList.remove('hidden');
 
-            if (val === 'openai_compatible' || isCustomProfile) {
+            if (val === 'openai_compatible') {
                 profileGroup.classList.remove('hidden');
                 // Ensure there's at least one default profile if they click OpenAI Compatible
                 if (customProfiles.length === 0) {
@@ -297,8 +286,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     profileSelect.dispatchEvent(new Event('change')); // Force select first
                 } else {
                     updateProfileDropdown();
-                    // Auto-load data if we switched TO a custom profile
-                    if (isCustomProfile) loadProfileData(val);
+                    // Load data from the currently selected profile
+                    loadProfileData(profileSelect.value);
                 }
             } else {
                 profileGroup.classList.add('hidden');
@@ -313,7 +302,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Keep local static model definitions in sync when provider changes manually
         // For custom profiles, availableModels key might just be 'openai_compatible' logic
-        const modelsLookupKey = val.startsWith('custom_') ? 'openai_compatible' : val;
+        const activeInternalProvider = val === 'openai_compatible' ? profileSelect.value : val;
+        const modelsLookupKey = activeInternalProvider.startsWith('custom_') ? 'openai_compatible' : val;
 
         if (availableModels[modelsLookupKey]) {
             const modelSelect = document.getElementById('model');
@@ -334,8 +324,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Helper to get all form data
     const getFormData = () => {
+        // Evaluate the true provider ID based on the UI dropdowns
+        const mainProvider = providerSelect.value;
+        const currentProvider = mainProvider === 'openai_compatible' ? profileSelect.value : mainProvider;
+
         // Save current UI state back to the active provider
-        const currentProvider = providerSelect.value;
         providerSettings[currentProvider] = {
             ...providerSettings[currentProvider],
             api_key: document.getElementById('api_key').value,
