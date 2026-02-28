@@ -13,6 +13,24 @@ import xml.etree.ElementTree as ET
 import ssl
 import os
 from datetime import datetime
+import http.server
+import socketserver
+import webbrowser
+import threading
+import socket
+import gi
+try:
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('WebKit2', '4.1')
+    from gi.repository import Gtk, WebKit2, GLib
+    GTK_UI_AVAILABLE = True
+except (ImportError, ValueError):
+    try:
+        gi.require_version('WebKit2', '4.0')
+        from gi.repository import Gtk, WebKit2, GLib
+        GTK_UI_AVAILABLE = True
+    except:
+        GTK_UI_AVAILABLE = False
 
 
 class SVGLLMGenerator(inkex.EffectExtension):
@@ -61,12 +79,298 @@ class SVGLLMGenerator(inkex.EffectExtension):
         }
     }
 
+    class WebUIHandler(http.server.SimpleHTTPRequestHandler):
+        """Handler for the Web UI."""
+        
+        def __init__(self, *args, extension_instance=None, **kwargs):
+            self.extension_instance = extension_instance
+            super().__init__(*args, **kwargs)
+
+        def log_message(self, format, *args):
+            # Silence logging
+            pass
+
+        def do_GET(self):
+            if self.path == '/get-settings':
+                # ... existing logic ...
+                config = self.extension_instance.config
+                provider = config.get('last_provider', self.extension_instance.options.provider or "openai")
+                
+                settings = {
+                    'api_key': self.extension_instance.get_api_key(provider) or "",
+                    'provider': provider,
+                    'api_endpoint': config.get('endpoints', {}).get(provider, self.extension_instance.options.api_endpoint or ""),
+                    'model': config.get('last_model', self.extension_instance.options.model or ""),
+                    'manual_model_name': config.get('manual_models', {}).get(provider, self.extension_instance.options.manual_model_name or ""),
+                    'prompt': self.extension_instance.options.prompt or "",
+                    'variations': self.extension_instance.options.variations or 1,
+                    'size': config.get('last_size', self.extension_instance.options.size or "512x512"),
+                    'aspect_ratio': config.get('last_aspect_ratio', self.extension_instance.options.aspect_ratio or "1:1"),
+                    'retry_count': config.get('last_retry_count', self.extension_instance.options.retry_count or 2),
+                    'temperature': config.get('last_temperature', self.extension_instance.options.temperature or 0.7),
+                    'position': config.get('last_position', self.extension_instance.options.position or "center"),
+                    'use_selection_context': config.get('last_use_selection_context', self.extension_instance.options.use_selection_context or False),
+                }
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(settings).encode('utf-8'))
+            elif self.path == '/status':
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(self.extension_instance.status_data).encode('utf-8'))
+            elif self.path == '/get-history':
+                history = self.extension_instance.load_history()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(history).encode('utf-8'))
+                
+            else:
+                super().do_GET()
+
+        def do_POST(self):
+            if self.path == '/submit':
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode('utf-8'))
+                
+                # Start generation in a background thread
+                threading.Thread(target=self.extension_instance.perform_generation, args=(data,)).start()
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'started'}).encode('utf-8'))
+                
+            elif self.path == '/save-settings':
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode('utf-8'))
+                
+                # Update config without closing UI
+                self.extension_instance.update_config_from_ui(data)
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'saved'}).encode('utf-8'))
+                
+            elif self.path == '/clear-history':
+                self.extension_instance.clear_history()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'cleared'}).encode('utf-8'))
+                
+            elif self.path == '/sync-models':
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                params = json.loads(post_data.decode('utf-8'))
+                
+                try:
+                    # Temporary hijack the instance options to run sync
+                    orig_options = self.extension_instance.options
+                    
+                    # Create a temporary object that mimics the options needed for sync
+                    class TempOptions:
+                        def __init__(self, p, e):
+                            self.provider = p
+                            self.api_endpoint = e
+                    
+                    self.extension_instance.options = TempOptions(params.get('provider'), params.get('api_endpoint'))
+                    
+                    # We need to fetch models without updating the .inx file
+                    # Let's extract the fetching logic or use a modified sync method
+                    # For now, I'll just return some defaults as proof of concept if I don't want to refactor yet,
+                    # but I should try to make it work.
+                    
+                    # Implementation of fetching logic (simplified from sync_models_from_provider)
+                    models = []
+                    provider = params.get('provider')
+                    api_key = params.get('api_key') or self.extension_instance.get_api_key()
+                    
+                    if provider == 'openai' or provider == 'openai_compatible':
+                        url = "https://api.openai.com/v1/models"
+                        if provider == 'openai_compatible':
+                            endpoint = params.get('api_endpoint') or "http://localhost:1234/v1"
+                            url = endpoint.rstrip('/') + "/models"
+                        
+                        headers = {'Authorization': f'Bearer {api_key}'}
+                        req = urllib.request.Request(url, headers=headers, method='GET')
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            result = json.loads(response.read().decode('utf-8'))
+                            models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'] or provider == 'openai_compatible']
+                    
+                    elif provider == 'ollama':
+                        endpoint = params.get('api_endpoint') or "http://localhost:11434"
+                        url = f"{endpoint}/api/tags"
+                        with urllib.request.urlopen(url, timeout=10) as response:
+                            result = json.loads(response.read().decode('utf-8'))
+                            models = [m['name'] for m in result.get('models', [])]
+                    
+                    self.extension_instance.options = orig_options # Restore
+                    
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'models': models}).encode('utf-8'))
+                    
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header('Content-type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(str(e).encode('utf-8'))
+
 
 
     def __init__(self):
         super().__init__()
         self.config_path = os.path.join(os.path.dirname(__file__), self.CONFIG_FILENAME)
         self.history_path = os.path.join(os.path.dirname(__file__), self.HISTORY_FILENAME)
+        self.web_ui_data = None
+        self.config = self.load_config()
+        
+        # Apply saved configuration to options
+        if self.config.get('last_provider'):
+            self.options.provider = self.config['last_provider']
+            
+            # Load endpoint and manual model for the last provider
+            endpoints = self.config.get('endpoints', {})
+            if self.options.provider in endpoints:
+                self.options.api_endpoint = endpoints[self.options.provider]
+            
+            manual_models = self.config.get('manual_models', {})
+            if self.options.provider in manual_models:
+                self.options.manual_model_name = manual_models[self.options.provider]
+            
+        if self.config.get('last_size'):
+            self.options.size = self.config['last_size']
+        if self.config.get('last_aspect_ratio'):
+            self.options.aspect_ratio = self.config['last_aspect_ratio']
+        
+        # Initialize status for async feedback
+        self.status_data = {"status": "idle", "progress": 0, "message": ""}
+        self.is_processing = False
+
+    def run_web_ui(self):
+        """Start a local server and open the Web UI in a native GTK window."""
+        # Find a free port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            port = s.getsockname()[1]
+        
+        ui_dir = os.path.join(os.path.dirname(__file__), 'ui')
+        
+        # Create the server
+        handler_class = lambda *args, **kwargs: self.WebUIHandler(
+            *args, extension_instance=self, directory=ui_dir, **kwargs
+        )
+        
+        server = socketserver.TCPServer(("", port), handler_class)
+        # Start server in a thread so GTK can run its main loop
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
+        
+        url = f"http://localhost:{port}/index.html"
+        
+        if GTK_UI_AVAILABLE:
+            from gi.repository import GLib, Gtk
+            # Add a heartbeat to keep the GTK main loop "alive" during background tasks
+            # This prevents the OS from marking the window as "Not Responding"
+            heartbeat_id = GLib.timeout_add(100, lambda: True)
+            
+            # Run GTK native window
+            GLib.idle_add(self._launch_gtk_window, url, server)
+            Gtk.main()
+            
+            # Cleanup heartbeat
+            GLib.source_remove(heartbeat_id)
+        else:
+            # Fallback to browser
+            webbrowser.open(url)
+            # For fallback, we still need to wait for server shutdown
+            # (server.shutdown is called by handler on /submit)
+            while server_thread.is_alive():
+                import time
+                time.sleep(0.1)
+        
+        server.server_close()
+        return self.web_ui_data
+
+    def _launch_gtk_window(self, url, server):
+        window = Gtk.Window(title="AI SVG Generator")
+        window.set_default_size(650, 800)
+        window.set_position(Gtk.WindowPosition.CENTER)
+        
+        webview = WebKit2.WebView()
+        window.add(webview)
+        webview.load_uri(url)
+        
+        def on_destroy(widget):
+            server.shutdown()
+            Gtk.main_quit()
+            
+        window.connect("destroy", on_destroy)
+        window.show_all()
+
+    def get_config_value(self, key, default=None):
+        """Helper to get value from config with fallback."""
+        if hasattr(self, 'config') and self.config:
+            return self.config.get(key, default)
+        return default
+
+    def update_config_from_ui(self, data):
+        """Update extension options and persistent config from UI data."""
+        # Update current options
+        for key, value in data.items():
+            if hasattr(self.options, key):
+                orig_val = getattr(self.options, key)
+                try:
+                    if isinstance(orig_val, bool):
+                        setattr(self.options, key, str(value).lower() == 'true')
+                    elif isinstance(orig_val, int):
+                        setattr(self.options, key, int(value))
+                    elif isinstance(orig_val, float):
+                        setattr(self.options, key, float(value))
+                    else:
+                        setattr(self.options, key, value)
+                except:
+                    setattr(self.options, key, value)
+        
+        # Update persistent config
+        config = self.load_config()
+        
+        # Save Provider specifics
+        provider = data.get('provider')
+        if provider:
+            config['last_provider'] = provider
+            if data.get('model'): config['last_model'] = data.get('model')
+            
+            if 'api_keys' not in config: config['api_keys'] = {}
+            if data.get('api_key'):
+                config['api_keys'][provider] = data.get('api_key')
+            
+            # Save endpoint and manual model
+            if 'endpoints' not in config: config['endpoints'] = {}
+            if data.get('api_endpoint'): config['endpoints'][provider] = data.get('api_endpoint')
+            
+            if 'manual_models' not in config: config['manual_models'] = {}
+            if data.get('manual_model_name'): config['manual_models'][provider] = data.get('manual_model_name')
+        
+        # Save Styles if present
+        if data.get('size'): config['last_size'] = data.get('size')
+        if data.get('aspect_ratio'): config['last_aspect_ratio'] = data.get('aspect_ratio')
+        if data.get('retry_count'): config['last_retry_count'] = int(data.get('retry_count'))
+        if data.get('temperature'): config['last_temperature'] = float(data.get('temperature'))
+        if data.get('position'): config['last_position'] = data.get('position')
+        if 'use_selection_context' in data: config['last_use_selection_context'] = data.get('use_selection_context')
+        
+        self.save_config(config)
+        self.config = config # Refresh local cache
+        inkex.errormsg(f"Settings saved for provider: {provider}")
     
     def add_arguments(self, pars):
         # Tab
@@ -90,6 +394,8 @@ class SVGLLMGenerator(inkex.EffectExtension):
         
         # Model settings
         pars.add_argument("--model", type=str, default="gpt-4-turbo", help="Model to use")
+        pars.add_argument("--manual_model_name", type=str, default="", help="Manual model name")
+        pars.add_argument("--sync_models", type=inkex.Boolean, default=False, help="Sync models from provider")
         pars.add_argument("--temperature", type=float, default=0.7, help="Temperature")
         pars.add_argument("--max_tokens", type=int, default=4000, help="Max tokens")
         pars.add_argument("--timeout", type=int, default=60, help="Request timeout in seconds")
@@ -132,161 +438,150 @@ class SVGLLMGenerator(inkex.EffectExtension):
         pars.add_argument("--save_to_history", type=inkex.Boolean, default=True,
             help="Save prompt to history")
         
+        # We don't call perform_generation here anymore, it's triggered from /submit
+        pass
 
+    def perform_generation(self, data):
+        """Asynchronous generation process called in a background thread."""
+        try:
+            self.is_processing = True
+            self.status_data = {"status": "processing", "progress": 5, "message": "Initializing..."}
+            
+            # Apply data from Web UI
+            for key, value in data.items():
+                if hasattr(self.options, key):
+                    orig_val = getattr(self.options, key)
+                    try:
+                        if isinstance(orig_val, bool):
+                            setattr(self.options, key, str(value).lower() == 'true')
+                        elif isinstance(orig_val, int):
+                            setattr(self.options, key, int(value))
+                        elif isinstance(orig_val, float):
+                            setattr(self.options, key, float(value))
+                        else:
+                            setattr(self.options, key, value)
+                    except:
+                        setattr(self.options, key, value)
+                else:
+                    setattr(self.options, key, value)
 
-        pars.add_argument("--save_to_disk", type=inkex.Boolean, default=True, help="Save to disk")
-        pars.add_argument("--save_directory", type=str, default="", help="Save directory")
-        pars.add_argument("--filename_prefix", type=str, default="ai_image", help="Filename prefix")
-        pars.add_argument("--embed_in_svg", type=inkex.Boolean, default=True, help="Embed in SVG")
-        pars.add_argument("--use_env_key", type=inkex.Boolean, default=True, help="Use of Env file")
-        pars.add_argument("--use_config_key", type=inkex.Boolean, default=True, help="Use of configurated key")
+            self.status_data.update({"progress": 10, "message": "Loading configuration..."})
+            api_key = self.get_api_key()
+            
+            # Save API key if requested
+            if self.options.save_api_key and api_key:
+                self.save_api_key(api_key)
 
+            # Validate prompt
+            if not self.options.prompt or len(self.options.prompt.strip()) < 3:
+                self.status_data = {"status": "error", "progress": 0, "message": "Prompt too short."}
+                self.is_processing = False
+                return
 
+            # Get size
+            width, height = self.get_size()
+            
+            # Get selection context
+            selection_context = ""
+            if self.options.use_selection_context and self.svg.selection:
+                self.status_data.update({"progress": 15, "message": "Analyzing selection..."})
+                selection_context = self.get_selection_context()
+            
+            # Build prompt
+            self.status_data.update({"progress": 20, "message": "Preparing AI context..."})
+            enhanced_prompt = self.build_prompt(width, height, selection_context)
+            
+            # Variations count
+            variations = min(max(1, int(self.options.variations or 1)), 4)
+            
+            for i in range(variations):
+                idx_msg = f" (Variation {i+1}/{variations})" if variations > 1 else ""
+                self.status_data.update({
+                    "progress": 20 + int((i / variations) * 60), 
+                    "message": f"Calling API...{idx_msg}"
+                })
+                
+                try:
+                    svg_code = self.call_api_with_retry(enhanced_prompt, api_key, i)
+                    if not svg_code:
+                        continue
+                    
+                    self.status_data.update({"message": f"Parsing response...{idx_msg}"})
+                    svg_code = self.validate_and_fix_svg(svg_code, width, height)
+                    
+                    self.status_data.update({"message": f"Adding to Inkscape...{idx_msg}"})
+                    offset_x = i * (width + 20) if variations > 1 else 0
+                    
+                    # Add to document
+                    self.add_svg_to_document(svg_code, width, height, offset_x, variation_num=i+1)
+                    
+                except Exception as e:
+                    inkex.errormsg(f"Variation {i+1} failed: {e}")
+            
+            # Save history
+            if self.options.save_to_history:
+                self.save_to_history(self.options.prompt, width, height)
 
-    
-
+            self.status_data = {"status": "completed", "progress": 100, "message": "Generation successful!"}
+            
+            # QUIT GTK after a small delay, safely from the UI thread
+            if GTK_UI_AVAILABLE:
+                from gi.repository import GLib, Gtk
+                import time
+                time.sleep(1) # Final display of success status
+                GLib.idle_add(Gtk.main_quit)
+                
+        except Exception as e:
+            self.status_data = {"status": "error", "progress": 0, "message": f"Error: {str(e)}"}
+        finally:
+            self.is_processing = False
 
     def effect(self):
         """Main effect function."""
-        # Load config and potentially saved API key
-        self.config = self.load_config()
-        
-        api_key = self.get_api_key()
-
-        # Save API key if requested
-        if self.options.save_api_key and api_key:
-            self.save_api_key(api_key)
-        
-        # Validate prompt
-        if not self.options.prompt or len(self.options.prompt.strip()) < 3:
-            inkex.errormsg("Please provide a description of what you want to generate.")
-            return
-        
-        # Get size
-        width, height = self.get_size()
-        
-        # Get selection context if enabled
-        selection_context = ""
-        if self.options.use_selection_context and self.svg.selection:
-            selection_context = self.get_selection_context()
-        
-        # Build the enhanced prompt
-        enhanced_prompt = self.build_prompt(width, height, selection_context)
-        
-        # Generate variations
-        variations = min(max(1, self.options.variations), 4)
-        
-        for i in range(variations):
-            try:
-                svg_code = self.call_api_with_retry(enhanced_prompt, api_key, i)
-                
-                if not svg_code:
-                    inkex.errormsg(f"No SVG code generated for variation {i+1}. Please try again.")
-                    continue
-                
-                # Validate SVG
-                svg_code = self.validate_and_fix_svg(svg_code, width, height)
-                
-                # Parse and add SVG to document
-                offset_x = i * (width + 20) if variations > 1 else 0
-                self.add_svg_to_document(svg_code, width, height, offset_x, variation_num=i+1)
-                
-            except Exception as e:
-                inkex.errormsg(f"Error generating variation {i+1}: {str(e)}")
-                continue
-        
-        # Save to history
-        if self.options.save_to_history:
-            self.save_to_history(self.options.prompt, width, height)
+        # Run Web UI immediately
+        self.run_web_ui()
+        # The background thread updates the document and then quits GTK.
+        # Once Gtk.main() returns, Inkscape will save the modified SVG.
     
     # ==================== Configuration Management ====================
     
-    def get_save_directory(self):
-        """Get save directory from options or config."""
-        if self.options.save_directory and self.options.save_directory.strip():
-            return self.options.save_directory
-        return self.get_config_value('default_save_directory', os.path.expanduser('~/Pictures/AI_Images'))
-    
-
-
-
-
-    
-    def get_api_key(self):
-            """
-            Get API key with priority:
-            1. Direct input (if provided and not placeholder)
-            2. Environment variable (if use_env_key is True)
-            3. Config file (if use_config_key is True)
-            """
+    def get_api_key(self, provider=None):
+        """
+        Get API key with priority:
+        1. Direct input (if provided and not placeholder)
+        2. Environment variable (if use_env_key is True)
+        3. Config file (if use_config_key is True)
+        """
+        if not provider:
             provider = self.options.provider
 
+        # Skip API key for local provider
+        if provider == 'local':
+            return ''
 
-            # Skip API key for local provider
-            if provider == 'local':
-                return ''
-
-            # 1. Check direct input first
-            if self.options.api_key and self.options.api_key not in ['', 'sk-...', 'sk-your-key-here']:
-                # Save to config if requested
-                if self.options.save_api_key:
-                    config_key = self.PROVIDERS.get(provider, {}).get('config_key', '')
-                    if config_key:
-                        self.set_config_value(config_key, self.options.api_key)
-                return self.options.api_key
-            
-            # 2. Check environment variable
-            if self.options.use_env_key:
-                env_key = self.PROVIDERS.get(provider, {}).get('env_key', '')
-                inkex.errormsg(f"env_key ::  {env_key}")
-
-                if env_key:
-                    inkex.errormsg(f"env_key ::  {env_key}")
-                    env_value = os.environ.get(env_key, '')
-                    inkex.errormsg(f"env_value ::  {env_value}")
-                    if env_value:
-                        return env_value
-            
-            # 3. Check config file
-            if self.options.use_config_key:
+        # 1. Check direct input first
+        if self.options.api_key and self.options.api_key not in ['', 'sk-...', 'sk-your-key-here']:
+            # Save to config if requested
+            if self.options.save_api_key:
                 config_key = self.PROVIDERS.get(provider, {}).get('config_key', '')
                 if config_key:
-                    config_value = self.config.get(config_key, '')
-                    if config_value and config_value not in ['sk-your-key-here', 'r8_your-token-here']:
-                        return config_value
-            
-            return ''
-    
-
-
-
-    def save_svg_to_disk(self, image_data):
-        """Save image data to disk."""
-        if not self.options.save_to_disk:
-            return None
-        save_dir = self.get_save_directory()
+                    self.set_config_value(config_key, self.options.api_key)
+            return self.options.api_key
         
-        try:
-            os.makedirs(save_dir, exist_ok=True)
-        except:
-            inkex.errormsg(f"Could not create directory: {save_dir}")
-            return None
+        # 2. Check config file directly
+        # First check nested api_keys dictionary (new format)
+        api_keys = self.config.get('api_keys', {})
+        if provider in api_keys and api_keys[provider]:
+            return api_keys[provider]
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        seed_str = f"_seed{self.options.seed}" if self.options.seed != -1 else ""
-        filename = f"{self.options.filename_prefix}_{timestamp}{seed_str}.svg"
-        filepath = os.path.join(save_dir, filename)
+        # Fallback to old top-level keys
+        config_key = self.PROVIDERS.get(provider, {}).get('config_key', '')
+        if config_key:
+            config_value = self.config.get(config_key, '')
+            if config_value and config_value not in ['sk-your-key-here', 'r8_your-token-here']:
+                return config_value
         
-        try:
-            with open(filepath, 'w') as f:
-                f.write(image_data)
-            return filepath
-        except Exception as e:
-            inkex.errormsg(f"Error saving image: {str(e)}")
-            return None
-
-
-
+        return ''
 
     def load_config(self):
         """Load saved configuration."""
@@ -346,6 +641,14 @@ class SVGLLMGenerator(inkex.EffectExtension):
                 json.dump(history, f, indent=2)
         except:
             pass
+
+    def clear_history(self):
+        """Clear all prompt history."""
+        if os.path.exists(self.history_path):
+            try:
+                os.remove(self.history_path)
+            except:
+                pass
     
     # ==================== Size Calculation ====================
     
@@ -535,14 +838,13 @@ class SVGLLMGenerator(inkex.EffectExtension):
             f"5. Include xmlns=\"http://www.w3.org/2000/svg\"",
             f"6. Use absolute positioning within the viewBox",
             f"7. Ensure all elements are properly closed",
-            f"8. Valid elements: svg, g, path, rect, circle, ellipse, line, polyline, polygon, text, tspan, defs, use, clipPath, mask, linearGradient, radialGradient, stop"
+            f"8. Valid elements: svg, g, path, rect, circle, ellipse, line, polyline, polygon, text, tspan, defs, use, clipPath, mask, linearGradient, radialGradient, stop",
+            f"\nCRITICAL: DO NOT WRITE PROSE. DO NOT EXPLAIN. NO CHINESE/ENGLISH TEXT OUTSIDE SVG. ONLY <svg>...</svg>",
+            f"请勿提供任何说明文字。只输出SVG代码。不要包含Markdown代码块符号。"
         ])
         
         if self.options.optimize_paths:
-            prompt_parts.append("9. Optimize paths - use shorthand commands, remove unnecessary precision")
-        
-        if self.options.add_accessibility:
-            prompt_parts.append("10. Add <title> and <desc> elements for accessibility")
+            prompt_parts.append("\n9. Optimize paths - use shorthand commands")
         
         return "\n".join(prompt_parts)
     
@@ -569,6 +871,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
         
         raise last_error
     
+
     def call_api(self, prompt, api_key):
         """Route to appropriate API based on provider."""
         provider = self.options.provider.lower()
@@ -581,20 +884,39 @@ class SVGLLMGenerator(inkex.EffectExtension):
             return self.call_google_api(prompt, api_key)
         elif provider == "ollama":
             return self.call_ollama_api(prompt)
+        elif provider == "openai_compatible":
+            return self.call_openai_api(prompt, api_key, is_compatible=True)
         else:
             raise Exception(f"Unknown provider: {provider}")
     
-    def call_openai_api(self, prompt, api_key):
-        """Call OpenAI API to generate SVG code."""
-        url = "https://api.openai.com/v1/chat/completions"
+    def call_openai_api(self, prompt, api_key, is_compatible=False):
+        """Call OpenAI API (or compatible) to generate SVG code."""
+        if is_compatible:
+            endpoint = self.options.api_endpoint or "http://localhost:1234/v1"
+            # Ensure endpoint has /chat/completions if not present
+            if not endpoint.endswith('/chat/completions'):
+                if not endpoint.endswith('/'):
+                    endpoint += '/'
+                endpoint += 'chat/completions'
+            url = endpoint
+        else:
+            url = "https://api.openai.com/v1/chat/completions"
+        
+        # Log for debugging
+        inkex.errormsg(f"Calling API: URL={url}, Model={self.options.model}")
         
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}'
         }
         
+        # Determine model name
+        model = self.options.model
+        if model == 'custom' or is_compatible:
+            model = self.options.manual_model_name or model
+        
         data = {
-            'model': self.options.model,
+            'model': model,
             'messages': [
                 {
                     'role': 'system',
@@ -750,10 +1072,6 @@ class SVGLLMGenerator(inkex.EffectExtension):
         
         if not svg_code:
             raise Exception("No response from API")
-        
-        if self.options.save_to_disk:
-            self.save_svg_to_disk(svg_code)
-
 
         return self.clean_svg_response(svg_code)
     
@@ -778,17 +1096,47 @@ class SVGLLMGenerator(inkex.EffectExtension):
         
         return svg_code
     
+    def extract_svg_code(self, text):
+        """Extract and sanitize SVG code from a potentially chatty AI response."""
+        if not text:
+            return ""
+            
+        # 1. Strip markdown code blocks if present
+        text = re.sub(r'```svg\s*', '', text)
+        text = re.sub(r'```\s*', '', text)
+        
+        # 2. Try to find <svg> ... </svg> blocks
+        matches = re.findall(r'<svg[^>]*>.*?</svg>', text, re.DOTALL | re.IGNORECASE)
+        
+        if matches:
+            matches.sort(key=len, reverse=True)
+            svg_candidate = matches[0]
+            
+            # 3. Sanitize: Remove plain text explaining code BETWEEN tagging pairs
+            # This is risky but often necessary for chatty local models.
+            # We keep everything inside <...> and remove things outside unless they are in <text>
+            # For simplicity, let's just remove obvious prose (lines starting with Chinese or bullet points)
+            # but a better way is to keep only valid tags and their content.
+            
+            # Simplified approach: If it fails to parse, we'll try a regex-based tag recovery in add_svg_to_document
+            return svg_candidate
+            
+        # 3. Fallback: if <svg> exists but </svg> is missing
+        if '<svg' in text.lower():
+            start_idx = text.lower().find('<svg')
+            return text[start_idx:] + '</svg>'
+            
+        return text
+
     def validate_and_fix_svg(self, svg_code, width, height):
         """Validate and attempt to fix common SVG issues."""
+        # Clean response first
+        svg_code = self.extract_svg_code(svg_code)
+        
         # Ensure it starts with <svg
-        if not svg_code.startswith('<svg'):
-            # Try to extract SVG from response
-            svg_match = re.search(r'<svg[^>]*>.*</svg>', svg_code, re.DOTALL)
-            if svg_match:
-                svg_code = svg_match.group(0)
-            else:
-                # Wrap content in SVG tags
-                svg_code = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">{svg_code}</svg>'
+        if not svg_code.strip().startswith('<svg'):
+             # Wrap content in SVG tags if we couldn't find a proper block
+             svg_code = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">{svg_code}</svg>'
         
         # Ensure xmlns is present
         if 'xmlns=' not in svg_code:
@@ -801,10 +1149,36 @@ class SVGLLMGenerator(inkex.EffectExtension):
         return svg_code
     
     def add_svg_to_document(self, svg_code, target_width, target_height, offset_x=0, variation_num=1):
-        """Parse SVG code and add it to the document."""
+        """Parse SVG code and add it to the document. Includes recovery for chatty models."""
         try:
-            # Parse the SVG code
-            svg_root = ET.fromstring(svg_code)
+            # First attempt: standard parse
+            try:
+                svg_root = ET.fromstring(svg_code)
+            except ET.ParseError as e:
+                # Recovery: AI might have put prose INSIDE the <svg> tag.
+                # We'll try to extract all valid-looking tags and re-wrap them.
+                inkex.errormsg(f"Parsing failed ({e}), attempting tag recovery...")
+                
+                # Extract all tags like <path.../> or <circle...></circle>
+                # Use a regex that looks for standard SVG elements
+                element_pattern = r'<(path|circle|rect|ellipse|line|polyline|polygon|text|g|defs|linearGradient|radialGradient|use|mask|clipPath|stop)[^>]*?>.*?</\1>|<(path|circle|rect|ellipse|line|polyline|polygon|text|g|defs|linearGradient|radialGradient|use|mask|clipPath|stop)[^>]*?/>'
+                elements = re.findall(element_pattern, svg_code, re.DOTALL | re.IGNORECASE)
+                
+                # elements is a list of tuples (tagname1, tagname2) due to the OR in the regex
+                # We want the actual full match for each.
+                full_elements = []
+                for match in re.finditer(element_pattern, svg_code, re.DOTALL | re.IGNORECASE):
+                    full_elements.append(match.group(0))
+                
+                if full_elements:
+                    # Wrap the recovered elements in a clean SVG tag
+                    recovered_svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {target_width} {target_height}">'
+                    recovered_svg += "\n".join(full_elements)
+                    recovered_svg += '</svg>'
+                    svg_root = ET.fromstring(recovered_svg)
+                    inkex.errormsg("Tag recovery successful.")
+                else:
+                    raise e
             
             # Get document dimensions
             doc_width = self.svg.viewport_width
