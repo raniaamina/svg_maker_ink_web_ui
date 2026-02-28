@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const profileGroup = document.getElementById('profile-group');
     const profileSelect = document.getElementById('profile_select');
     const addProfileBtn = document.getElementById('add-profile-btn');
+    const delProfileBtn = document.getElementById('del-profile-btn');
 
     let availableModels = {}; // Global store for models from backend
     let customProfiles = []; // Global store for profiles
@@ -266,6 +267,31 @@ document.addEventListener('DOMContentLoaded', () => {
             updateProfileDropdown();
             profileSelect.value = id;
             profileSelect.dispatchEvent(new Event('change'));
+        }
+    });
+
+    delProfileBtn.addEventListener('click', () => {
+        const selectedId = profileSelect.value;
+        if (!selectedId) return;
+
+        const profileInfo = customProfiles.find(p => p.id === selectedId);
+        const name = profileInfo ? profileInfo.name : "this profile";
+
+        if (confirm(`Are you sure you want to delete the profile "${name}"?`)) {
+            // Remove from profiles
+            customProfiles = customProfiles.filter(p => p.id !== selectedId);
+            // Remove from settings
+            delete providerSettings[selectedId];
+
+            if (customProfiles.length > 0) {
+                updateProfileDropdown();
+                profileSelect.value = customProfiles[0].id;
+                profileSelect.dispatchEvent(new Event('change'));
+            } else {
+                // If no profiles left, switch back to 'openai' or just create a default
+                providerSelect.value = 'openai';
+                providerSelect.dispatchEvent(new Event('change'));
+            }
         }
     });
 

@@ -373,7 +373,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
             
             # Save any other profiles sent (UI handles syncing them)
             if 'provider_settings' in data:
-                config['provider_settings'].update(data['provider_settings'])
+                config['provider_settings'] = data['provider_settings']
         
         # Save Layout Styles
         if 'layout_settings' not in config: config['layout_settings'] = {}
