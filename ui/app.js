@@ -16,9 +16,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateSummary = () => {
         const p = providerSelect.value;
         const m = document.getElementById('model').value;
-        const mm = document.getElementById('manual_model_name').value;
         summaryDiv.innerText = `Active: ${p} | Model: ${mm || m}`;
     };
+
+    let availableModels = {}; // Global store for models from backend
 
     // Initial settings fetch
     const fetchSettings = async () => {
@@ -26,20 +27,41 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/get-settings');
             if (response.ok) {
                 const settings = await response.json();
+
+                if (settings.available_models) {
+                    availableModels = settings.available_models;
+                }
+
                 if (settings.prompt) document.getElementById('prompt').value = settings.prompt;
                 if (settings.api_key) document.getElementById('api_key').value = settings.api_key;
                 if (settings.api_endpoint) document.getElementById('api_endpoint').value = settings.api_endpoint;
+
+                // Set the model dropdown options based on the provider first
+                const updateModelDropdown = (provider) => {
+                    const modelSelect = document.getElementById('model');
+                    modelSelect.innerHTML = '';
+                    if (availableModels[provider]) {
+                        availableModels[provider].forEach(m => {
+                            const opt = document.createElement('option');
+                            opt.value = m;
+                            opt.innerText = m;
+                            modelSelect.appendChild(opt);
+                        });
+                    } else {
+                        const opt = document.createElement('option');
+                        opt.value = 'unknown';
+                        opt.innerText = 'Unknown Provider';
+                        modelSelect.appendChild(opt);
+                    }
+                };
+
                 if (settings.provider) {
                     providerSelect.value = settings.provider;
+                    updateModelDropdown(settings.provider);
                     providerSelect.dispatchEvent(new Event('change'));
                 }
                 if (settings.model) {
-                    const modelSelect = document.getElementById('model');
-                    const opt = document.createElement('option');
-                    opt.value = settings.model;
-                    opt.innerText = settings.model;
-                    modelSelect.innerHTML = '';
-                    modelSelect.appendChild(opt);
+                    document.getElementById('model').value = settings.model;
                 }
                 if (settings.manual_model_name) document.getElementById('manual_model_name').value = settings.manual_model_name;
                 if (settings.variations) document.getElementById('variations').value = settings.variations;
@@ -177,6 +199,19 @@ document.addEventListener('DOMContentLoaded', () => {
             endpointGroup.classList.add('hidden');
             manualModelGroup.classList.add('hidden');
         }
+
+        // Keep local static model definitions in sync when provider changes manually
+        if (availableModels[val]) {
+            const modelSelect = document.getElementById('model');
+            modelSelect.innerHTML = '';
+            availableModels[val].forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.innerText = m;
+                modelSelect.appendChild(opt);
+            });
+        }
+
         updateSummary();
     });
 

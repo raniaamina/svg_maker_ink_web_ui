@@ -48,39 +48,33 @@ class SVGLLMGenerator(inkex.EffectExtension):
     PROVIDERS = {
         'openai': {
             'name': 'OpenAI DALL-E',
-            'generate_url': 'https://api.openai.com/v1/images/generations',
-            'edit_url': 'https://api.openai.com/v1/images/edits',
-            'variation_url': 'https://api.openai.com/v1/images/variations',
             'env_key': 'OPENAI_API_KEY',
             'config_key': 'openai_api_key',
-            'models': ['dall-e-3', 'dall-e-2', 'gpt-image-1'],
-            'sizes': ['1024x1024', '1024x1792', '1792x1024', '512x512', '256x256']
+            'models': ['gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
         },
-        'stability': {
-            'name': 'Stability AI',
-            'generate_url': 'https://api.stability.ai/v1/generation/{engine}/text-to-image',
-            'img2img_url': 'https://api.stability.ai/v1/generation/{engine}/image-to-image',
-            'env_key': 'STABILITY_API_KEY',
-            'config_key': 'stability_api_key',
-            'models': ['stable-diffusion-xl-1024-v1-0', 'stable-diffusion-v1-6', 'stable-diffusion-xl-beta-v2-2-2'],
-            'sizes': ['1024x1024', '1152x896', '896x1152', '1216x832', '832x1216', '512x512']
+        'anthropic': {
+            'name': 'Anthropic Claude',
+            'env_key': 'ANTHROPIC_API_KEY',
+            'config_key': 'anthropic_api_key',
+            'models': ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'],
         },
-        'replicate': {
-            'name': 'Replicate',
-            'generate_url': 'https://api.replicate.com/v1/predictions',
-            'env_key': 'REPLICATE_API_TOKEN',
-            'config_key': 'replicate_api_key',
-            'models': ['stability-ai/sdxl', 'black-forest-labs/flux-schnell', 'black-forest-labs/flux-pro'],
-            'sizes': ['1024x1024', '1024x768', '768x1024', '512x512']
+        'google': {
+            'name': 'Google Gemini',
+            'env_key': 'GEMINI_API_KEY',
+            'config_key': 'google_api_key',
+            'models': ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro'],
         },
-        'local': {
-            'name': 'Local (Automatic1111/ComfyUI)',
-            'generate_url': 'http://127.0.0.1:7860/sdapi/v1/txt2img',
-            'img2img_url': 'http://127.0.0.1:7860/sdapi/v1/img2img',
+        'ollama': {
+            'name': 'Ollama (Local)',
             'env_key': '',
             'config_key': '',
-            'models': ['default'],
-            'sizes': ['1024x1024', '768x768', '512x512', '768x512', '512x768']
+            'models': ['llama3.1', 'llama3', 'mistral', 'codellama'],
+        },
+        'openai_compatible': {
+            'name': 'OpenAI Compatible',
+            'env_key': '',
+            'config_key': '',
+            'models': ['custom'],
         }
     }
 
@@ -115,6 +109,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
                     'temperature': config.get('last_temperature', self.extension_instance.options.temperature or 0.7),
                     'position': config.get('last_position', self.extension_instance.options.position or "center"),
                     'use_selection_context': config.get('last_use_selection_context', self.extension_instance.options.use_selection_context or False),
+                    'available_models': {k: v['models'] for k, v in self.extension_instance.PROVIDERS.items()}
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -214,6 +209,17 @@ class SVGLLMGenerator(inkex.EffectExtension):
                         with urllib.request.urlopen(url, timeout=10) as response:
                             result = json.loads(response.read().decode('utf-8'))
                             models = [m['name'] for m in result.get('models', [])]
+                            
+                    elif provider == 'google':
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+                        with urllib.request.urlopen(url, timeout=10) as response:
+                            result = json.loads(response.read().decode('utf-8'))
+                            # Filter for gemini models that end with 'models/gemini-*' and extract base name
+                            models = [m['name'].split('/')[-1] for m in result.get('models', []) if 'gemini' in m['name']]
+                            
+                    elif provider == 'anthropic':
+                        # Anthropic doesn't have a public /models endpoint yet, return hardcoded current models
+                        models = self.extension_instance.PROVIDERS['anthropic']['models']
                     
                     self.extension_instance.options = orig_options # Restore
                     
@@ -375,7 +381,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
         
         self.save_config(config)
         self.config = config # Refresh local cache
-        inkex.errormsg(f"Settings saved for provider: {provider}")
+        # Remove inkex.errormsg logs to avoid Inkscape dialog popup
     
     def add_arguments(self, pars):
         # Tab
@@ -907,8 +913,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
         else:
             url = "https://api.openai.com/v1/chat/completions"
         
-        # Log for debugging
-        inkex.errormsg(f"Calling API: URL={url}, Model={self.options.model}")
+        # Logs removed to prevent Inkscape popup
         
         headers = {
             'Content-Type': 'application/json',
