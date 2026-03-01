@@ -969,6 +969,10 @@ class SVGLLMGenerator(inkex.EffectExtension):
             'Authorization': f'Bearer {api_key}'
         }
         
+        if is_compatible and 'openrouter.ai' in url.lower():
+            headers['HTTP-Referer'] = 'https://github.com/bezineb5/svg_maker'
+            headers['X-OpenRouter-Title'] = 'Inkscape AI SVG Generator'
+        
         # Determine model name
         model = self.options.model
         if model == 'custom' or is_compatible:
@@ -1076,7 +1080,10 @@ class SVGLLMGenerator(inkex.EffectExtension):
         return self._make_api_request(url, headers, data, response_parser='ollama', use_ssl=False)
     
     def _make_api_request(self, url, headers, data, response_parser='openai', use_ssl=True):
-        """Make HTTP request to API."""
+        """Make HTTP request to API. Debugging active."""
+        with open(os.path.join(os.path.dirname(__file__), "debug_outgoing.log"), "w") as f:
+            f.write(f"URL: {url}\nHeaders: {headers}\nParser: {response_parser}\nAPI Key Length: {len(headers.get('Authorization', ''))}")
+            
         req = urllib.request.Request(
             url,
             data=json.dumps(data).encode('utf-8'),
