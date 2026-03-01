@@ -362,6 +362,19 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('manual_model_name').addEventListener('input', updateSummary);
     document.getElementById('model').addEventListener('change', updateSummary);
 
+    // UX Improvement: Show full datalist on click by temporarily clearing value
+    let _tempModelVal = '';
+    const modelInput = document.getElementById('model');
+    modelInput.addEventListener('focus', function () {
+        _tempModelVal = this.value;
+        this.value = '';
+    });
+    modelInput.addEventListener('blur', function () {
+        if (this.value.trim() === '') {
+            this.value = _tempModelVal;
+        }
+    });
+
     // Helper to get all form data
     const getFormData = () => {
         // Evaluate the true provider ID based on the UI dropdowns

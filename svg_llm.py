@@ -205,7 +205,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
                         req = urllib.request.Request(url, headers=headers, method='GET')
                         with urllib.request.urlopen(req, timeout=10) as response:
                             result = json.loads(response.read().decode('utf-8'))
-                            models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'] or provider_type == 'openai_compatible']
+                            models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'] or 'o1-' in m['id'] or 'o3-' in m['id'] or provider_type == 'openai_compatible']
                     
                     elif provider_type == 'ollama':
                         endpoint = params.get('api_endpoint') or "http://localhost:11434"
@@ -992,9 +992,18 @@ class SVGLLMGenerator(inkex.EffectExtension):
                     'content': prompt
                 }
             ],
-            'temperature': self.options.temperature,
-            'max_tokens': self.options.max_tokens
+            'temperature': self.options.temperature
         }
+        
+        # Native OpenAI strongly prefers max_completion_tokens now, especially for o1/o3
+        if not is_compatible or ('o1-' in model or 'o3-' in model):
+            data['max_completion_tokens'] = self.options.max_tokens
+            if 'o1-' in model or 'o3-' in model:
+                # o1/o3 strictly reject non-default temperature. Best to omit it entirely.
+                if 'temperature' in data:
+                    del data['temperature']
+        else:
+            data['max_tokens'] = self.options.max_tokens
         
         # Add seed if specified
         if self.options.seed >= 0:
