@@ -332,13 +332,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const modelsLookupKey = activeInternalProvider.startsWith('custom_') ? 'openai_compatible' : val;
 
         if (availableModels[modelsLookupKey]) {
-            const modelSelect = document.getElementById('model');
-            modelSelect.innerHTML = '';
-            availableModels[modelsLookupKey].forEach(m => {
+            const modelList = document.getElementById('model-list');
+            modelList.innerHTML = '';
+
+            // Clone array and sort alphabetically
+            [...availableModels[modelsLookupKey]].sort((a, b) => a.localeCompare(b)).forEach(m => {
                 const opt = document.createElement('option');
                 opt.value = m;
-                opt.innerText = m;
-                modelSelect.appendChild(opt);
+                modelList.appendChild(opt);
             });
         }
 
@@ -517,13 +518,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (response.ok) {
                 const data = await response.json();
-                const modelSelect = document.getElementById('model');
-                modelSelect.innerHTML = '';
+                const modelList = document.getElementById('model-list');
+                modelList.innerHTML = '';
+
+                // Sort models alphabetically
+                data.models.sort((a, b) => a.localeCompare(b));
+
                 data.models.forEach(m => {
                     const opt = document.createElement('option');
                     opt.value = m;
-                    opt.innerText = m;
-                    modelSelect.appendChild(opt);
+                    modelList.appendChild(opt);
                 });
                 statusMsg.innerText = "Models updated successfully.";
             } else {

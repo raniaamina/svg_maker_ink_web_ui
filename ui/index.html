@@ -105,9 +105,11 @@
                 <div class="form-group">
                     <label for="model">Model</label>
                     <div class="grid" style="grid-template-columns: 1fr auto;">
-                        <select id="model">
-                            <option value="gpt-4o">GPT-4o (Default)</option>
-                        </select>
+                        <input type="text" id="model" list="model-list" placeholder="Select or search model..."
+                            style="width: 100%;">
+                        <datalist id="model-list">
+                            <option value="gpt-4o">
+                        </datalist>
                         <button type="button" id="sync-btn"
                             style="padding: 0 15px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: white; cursor: pointer;">Sync</button>
                     </div>
