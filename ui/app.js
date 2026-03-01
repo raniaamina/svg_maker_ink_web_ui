@@ -150,8 +150,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 item.addEventListener('click', () => {
                     document.getElementById('prompt').value = entry.prompt;
                     if (entry.provider) {
-                        providerSelect.value = entry.provider;
-                        providerSelect.dispatchEvent(new Event('change'));
+                        if (entry.provider.startsWith('custom_')) {
+                            providerSelect.value = 'openai_compatible';
+                            providerSelect.dispatchEvent(new Event('change'));
+                            profileSelect.value = entry.provider;
+                            profileSelect.dispatchEvent(new Event('change'));
+                        } else {
+                            providerSelect.value = entry.provider;
+                            providerSelect.dispatchEvent(new Event('change'));
+                        }
+
+                        // Also restore the model if applicable
+                        if (entry.model) {
+                            const modelInput = document.getElementById('model');
+                            if (modelInput) modelInput.value = entry.model;
+                        }
                     }
                     // Switch to Generator tab
                     document.querySelector('[data-tab="generator"]').click();
