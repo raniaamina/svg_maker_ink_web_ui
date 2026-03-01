@@ -177,11 +177,13 @@ class SVGLLMGenerator(inkex.EffectExtension):
                     
                     # Create a temporary object that mimics the options needed for sync
                     class TempOptions:
-                        def __init__(self, p, e):
+                        def __init__(self, p, e, k):
                             self.provider = p
                             self.api_endpoint = e
+                            self.api_key = k
+                            self.save_api_key = False
                     
-                    self.extension_instance.options = TempOptions(params.get('provider'), params.get('api_endpoint'))
+                    self.extension_instance.options = TempOptions(params.get('provider'), params.get('api_endpoint'), params.get('api_key'))
                     
                     # We need to fetch models without updating the .inx file
                     # Let's extract the fetching logic or use a modified sync method
@@ -195,6 +197,8 @@ class SVGLLMGenerator(inkex.EffectExtension):
                     
                     provider_type = 'openai_compatible' if provider and provider.startswith('custom_') else provider
                     
+                    ssl_context = ssl._create_unverified_context()
+                    
                     if provider_type == 'openai' or provider_type == 'openai_compatible':
                         url = "https://api.openai.com/v1/models"
                         if provider_type == 'openai_compatible':
@@ -203,20 +207,20 @@ class SVGLLMGenerator(inkex.EffectExtension):
                         
                         headers = {'Authorization': f'Bearer {api_key}'}
                         req = urllib.request.Request(url, headers=headers, method='GET')
-                        with urllib.request.urlopen(req, timeout=10) as response:
+                        with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
                             result = json.loads(response.read().decode('utf-8'))
                             models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'] or 'o1-' in m['id'] or 'o3-' in m['id'] or provider_type == 'openai_compatible']
                     
                     elif provider_type == 'ollama':
                         endpoint = params.get('api_endpoint') or "http://localhost:11434"
                         url = f"{endpoint}/api/tags"
-                        with urllib.request.urlopen(url, timeout=10) as response:
+                        with urllib.request.urlopen(url, timeout=10, context=ssl_context) as response:
                             result = json.loads(response.read().decode('utf-8'))
                             models = [m['name'] for m in result.get('models', [])]
                             
                     elif provider_type == 'google':
                         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-                        with urllib.request.urlopen(url, timeout=10) as response:
+                        with urllib.request.urlopen(url, timeout=10, context=ssl_context) as response:
                             result = json.loads(response.read().decode('utf-8'))
                             # Filter for gemini models that end with 'models/gemini-*' and extract base name
                             models = [m['name'].split('/')[-1] for m in result.get('models', []) if 'gemini' in m['name']]
