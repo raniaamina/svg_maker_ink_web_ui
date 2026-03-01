@@ -190,9 +190,11 @@ class SVGLLMGenerator(inkex.EffectExtension):
                     provider = params.get('provider')
                     api_key = params.get('api_key') or self.extension_instance.get_api_key()
                     
-                    if provider == 'openai' or provider == 'openai_compatible':
+                    provider_type = 'openai_compatible' if provider and provider.startswith('custom_') else provider
+                    
+                    if provider_type == 'openai' or provider_type == 'openai_compatible':
                         url = "https://api.openai.com/v1/models"
-                        if provider == 'openai_compatible':
+                        if provider_type == 'openai_compatible':
                             endpoint = params.get('api_endpoint') or "http://localhost:1234/v1"
                             url = endpoint.rstrip('/') + "/models"
                         
@@ -200,23 +202,23 @@ class SVGLLMGenerator(inkex.EffectExtension):
                         req = urllib.request.Request(url, headers=headers, method='GET')
                         with urllib.request.urlopen(req, timeout=10) as response:
                             result = json.loads(response.read().decode('utf-8'))
-                            models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'] or provider == 'openai_compatible']
+                            models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'] or provider_type == 'openai_compatible']
                     
-                    elif provider == 'ollama':
+                    elif provider_type == 'ollama':
                         endpoint = params.get('api_endpoint') or "http://localhost:11434"
                         url = f"{endpoint}/api/tags"
                         with urllib.request.urlopen(url, timeout=10) as response:
                             result = json.loads(response.read().decode('utf-8'))
                             models = [m['name'] for m in result.get('models', [])]
                             
-                    elif provider == 'google':
+                    elif provider_type == 'google':
                         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
                         with urllib.request.urlopen(url, timeout=10) as response:
                             result = json.loads(response.read().decode('utf-8'))
                             # Filter for gemini models that end with 'models/gemini-*' and extract base name
                             models = [m['name'].split('/')[-1] for m in result.get('models', []) if 'gemini' in m['name']]
                             
-                    elif provider == 'anthropic':
+                    elif provider_type == 'anthropic':
                         # Anthropic doesn't have a public /models endpoint yet, return hardcoded current models
                         models = self.extension_instance.PROVIDERS['anthropic']['models']
                     
@@ -914,16 +916,17 @@ class SVGLLMGenerator(inkex.EffectExtension):
     def call_api(self, prompt, api_key):
         """Route to appropriate API based on provider."""
         provider = self.options.provider.lower()
+        provider_type = 'openai_compatible' if provider.startswith('custom_') else provider
         
-        if provider == "openai":
+        if provider_type == "openai":
             return self.call_openai_api(prompt, api_key)
-        elif provider == "anthropic":
+        elif provider_type == "anthropic":
             return self.call_anthropic_api(prompt, api_key)
-        elif provider == "google":
+        elif provider_type == "google":
             return self.call_google_api(prompt, api_key)
-        elif provider == "ollama":
+        elif provider_type == "ollama":
             return self.call_ollama_api(prompt)
-        elif provider == "openai_compatible":
+        elif provider_type == "openai_compatible":
             return self.call_openai_api(prompt, api_key, is_compatible=True)
         else:
             raise Exception(f"Unknown provider: {provider}")
