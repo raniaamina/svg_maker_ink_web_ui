@@ -104,6 +104,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (settings.position) document.getElementById('position').value = settings.position;
                 if (settings.use_selection_context !== undefined) document.getElementById('use_selection_context').checked = settings.use_selection_context;
 
+                const uiBackendSelect = document.getElementById('ui-backend-select');
+                if (uiBackendSelect && settings.ui_backend) {
+                    uiBackendSelect.value = settings.ui_backend;
+                }
+
                 updateSummary();
             }
         } catch (err) {
@@ -407,7 +412,8 @@ document.addEventListener('DOMContentLoaded', () => {
             variations: document.getElementById('variations').value,
             retry_count: document.getElementById('retry_count').value,
             position: document.getElementById('position').value,
-            use_selection_context: document.getElementById('use_selection_context').checked
+            use_selection_context: document.getElementById('use_selection_context').checked,
+            ui_backend: document.getElementById('ui-backend-select') ? document.getElementById('ui-backend-select').value : 'auto'
         };
     };
 
@@ -503,6 +509,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             clearInterval(poll);
                             progressStatus.innerHTML = "<strong>SUCCESS!</strong> Finalizing with Inkscape...";
                             progressFill.style.background = "#4ade80";
+                            setTimeout(() => {
+                                fetch('/close').catch(() => { });
+                                window.open('', '_self', '');
+                                window.close();
+                            }, 1000);
                         } else if (statusData.status === 'error') {
                             clearInterval(poll);
                             progressStatus.innerHTML = `<span style="color: #ef4444;"><strong>Error:</strong> ${statusData.message}</span>`;
@@ -568,4 +579,9 @@ document.addEventListener('DOMContentLoaded', () => {
             syncBtn.disabled = false;
         }
     });
+
+    // Heartbeat monitor for browser-based graceful shutdown
+    setInterval(() => {
+        fetch('/heartbeat').catch(() => { });
+    }, 500);
 });

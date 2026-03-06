@@ -114,7 +114,19 @@
                             style="padding: 0 15px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: white; cursor: pointer;">Sync</button>
                     </div>
                 </div>
-                <button type="button" class="btn-secondary" id="save-setup-btn">Save Configuration</button>
+
+                <div class="form-group" style="margin-top: 15px;">
+                    <label for="ui-backend-select">Window Type (UI Backend)</label>
+                    <select id="ui-backend-select" name="ui_backend">
+                        <option value="auto">Automatic (Recommended)</option>
+                        <option value="gtk">GTK+ Native (Linux)</option>
+                        <option value="webview">PyWebView Native</option>
+                        <option value="browser">System Default Browser</option>
+                    </select>
+                </div>
+
+                <button type="button" class="btn-secondary" id="save-setup-btn" style="margin-top: 15px;">Save
+                    Configuration</button>
             </div>
 
             <!-- Layout Tab -->

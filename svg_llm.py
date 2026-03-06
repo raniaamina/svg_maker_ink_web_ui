@@ -32,6 +32,12 @@ except (ImportError, ValueError):
     except:
         GTK_UI_AVAILABLE = False
 
+try:
+    import webview
+    WEBVIEW_AVAILABLE = True
+except (ImportError, ValueError):
+    WEBVIEW_AVAILABLE = False
+
 import sys
 # Redirect all stderr to a log file to suppress Inkscape's annoying log dialog and GTK warnings
 log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'svg_maker.log')
@@ -119,6 +125,13 @@ class SVGLLMGenerator(inkex.EffectExtension):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps(self.extension_instance.status_data).encode('utf-8'))
+            elif self.path == '/heartbeat':
+                import time
+                self.extension_instance.last_heartbeat = time.time()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'alive'}).encode('utf-8'))
             elif self.path == '/get-history':
                 history = self.extension_instance.load_history()
                 self.send_response(200)
@@ -165,6 +178,21 @@ class SVGLLMGenerator(inkex.EffectExtension):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({'status': 'cleared'}).encode('utf-8'))
+                
+            elif self.path == '/close':
+                # Shut down safely
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'closing'}).encode('utf-8'))
+                
+                bg = getattr(self.extension_instance, 'active_backend', None)
+                if bg == 'gtk':
+                    from gi.repository import GLib, Gtk
+                    GLib.idle_add(Gtk.main_quit)
+                elif bg == 'webview':
+                    try: self.extension_instance.webview_window.destroy()
+                    except: pass
                 
             elif self.path == '/sync-models':
                 content_length = int(self.headers['Content-Length'])
@@ -296,7 +324,25 @@ class SVGLLMGenerator(inkex.EffectExtension):
         
         url = f"http://localhost:{port}/index.html"
         
-        if GTK_UI_AVAILABLE:
+        ui_pref = self.config.get('ui_backend', 'auto')
+        
+        use_gtk = False
+        use_webview = False
+        
+        if ui_pref == 'gtk' and GTK_UI_AVAILABLE:
+            use_gtk = True
+        elif ui_pref == 'webview' and WEBVIEW_AVAILABLE:
+            use_webview = True
+        elif ui_pref == 'browser':
+            pass
+        elif ui_pref == 'auto':
+            if GTK_UI_AVAILABLE:
+                use_gtk = True
+            elif WEBVIEW_AVAILABLE:
+                use_webview = True
+
+        if use_gtk:
+            self.active_backend = 'gtk'
             from gi.repository import GLib, Gtk
             # Add a heartbeat to keep the GTK main loop "alive" during background tasks
             # This prevents the OS from marking the window as "Not Responding"
@@ -308,14 +354,53 @@ class SVGLLMGenerator(inkex.EffectExtension):
             
             # Cleanup heartbeat
             GLib.source_remove(heartbeat_id)
+        elif use_webview:
+            self.active_backend = 'webview'
+            self.webview_window = webview.create_window('AI SVG Generator', url, width=650, height=800, resizable=True)
+            webview.start()
+            self.status_data['status'] = 'closed'
         else:
-            # Fallback to browser
-            webbrowser.open(url)
-            # For fallback, we still need to wait for server shutdown
-            # (server.shutdown is called by handler on /submit)
-            while server_thread.is_alive():
-                import time
-                time.sleep(0.1)
+            import time
+            import subprocess
+            self.last_heartbeat = time.time()
+            start_time = time.time()
+            
+            app_launched = False
+            self.app_process = None
+            browser_paths = [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+            ]
+            
+            if os.name == 'nt':
+                for b_path in browser_paths:
+                    if os.path.exists(b_path):
+                        try:
+                            self.app_process = subprocess.Popen([b_path, f"--app={url}", "--window-size=650,800"])
+                            app_launched = True
+                            self.active_backend = 'app'
+                            break
+                        except Exception as e:
+                            with open(log_path, 'a') as f:
+                                f.write(f"Failed to launch browser app: {e}\n")
+                            pass
+            
+            if not app_launched:
+                self.active_backend = 'browser'
+                webbrowser.open(url)
+                
+            while self.is_processing or self.status_data.get('status') == 'idle':
+                time.sleep(0.5)
+                # Auto kill server if UI hangs
+                if time.time() - self.last_heartbeat > 3.0 and time.time() - start_time > 15.0:
+                    self.status_data['status'] = 'closed'
+                    break
+
+            if app_launched and self.app_process:
+                try: self.app_process.terminate()
+                except: pass
         
         server.server_close()
         return self.web_ui_data
@@ -393,6 +478,8 @@ class SVGLLMGenerator(inkex.EffectExtension):
         if data.get('temperature'): layout['temperature'] = float(data.get('temperature'))
         if data.get('position'): layout['position'] = data.get('position')
         if 'use_selection_context' in data: layout['use_selection_context'] = data.get('use_selection_context')
+        
+        if 'ui_backend' in data: config['ui_backend'] = data['ui_backend']
         
         self.save_config(config)
         self.config = config # Refresh local cache
@@ -563,12 +650,16 @@ class SVGLLMGenerator(inkex.EffectExtension):
 
                 self.status_data = {"status": "completed", "progress": 100, "message": f"Successfully generated {success_count} variations!"}
                 
-                # QUIT GTK after a small delay, safely from the UI thread
-                if GTK_UI_AVAILABLE:
+                # QUIT gracefully
+                import time
+                time.sleep(1.5)
+                bg = getattr(self, 'active_backend', None)
+                if bg == 'gtk':
                     from gi.repository import GLib, Gtk
-                    import time
-                    time.sleep(1) # Final display of success status
                     GLib.idle_add(Gtk.main_quit)
+                elif bg == 'webview':
+                    try: self.webview_window.destroy()
+                    except: pass
             else:
                 self.status_data = {"status": "error", "progress": 0, "message": f"Error: {last_error or 'Unknown generation failure'}"}
                 
@@ -1439,4 +1530,7 @@ class SVGLLMGenerator(inkex.EffectExtension):
 
 
 if __name__ == '__main__':
-    SVGLLMGenerator().run()
+    try:
+        SVGLLMGenerator().run()
+    finally:
+        log_file.close()
